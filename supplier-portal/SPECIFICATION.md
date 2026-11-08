@@ -2,15 +2,18 @@
 
 | | |
 |---|---|
-| **Status** | Draft v0.1 — for review |
+| **Client** | **Harmatton** |
+| **Status** | Draft v0.2 — for review |
 | **Date** | 2026-11-08 |
 | **Scope** | Secure web portal to exchange technical, project (quality) and delivery documents with suppliers, organised by PLM part number |
+| **Design principle** | *Configurable by design* — every business choice is a setting Harmatton controls (§17); only security floors are fixed |
+| **AI** | Built on **Claude** (Anthropic) — Harmatton is already a Claude partner (§6.4) |
 
 ---
 
 ## 1. Purpose
 
-Today, drawings, specifications, quality documents and delivery paperwork are exchanged with suppliers through e‑mail and shared folders. This makes it hard to know **which revision a supplier is working from**, **which documents are approved**, and **who changed or deleted what**.
+This portal is being built for **Harmatton**. Today, drawings, specifications, quality documents and delivery paperwork are exchanged with suppliers through e‑mail and shared folders. This makes it hard to know **which revision a supplier is working from**, **which documents are approved**, and **who changed or deleted what**.
 
 The Supplier Collaboration Portal gives every **PLM part number** a single, controlled workspace where:
 
@@ -25,7 +28,8 @@ The Supplier Collaboration Portal gives every **PLM part number** a single, cont
 - One source of truth per part number, aligned with PLM revisions.
 - Traceable, auditable document flow (who uploaded, who approved, when, which version).
 - Strict, need‑to‑know access for suppliers and internal staff.
-- Faster supplier approval (fewer e‑mails, clear status, automatic reminders).
+- Faster supplier approval (fewer e‑mails, clear status, automatic reminders, AI‑assisted pre‑review with Claude).
+- **Configurable, not hard‑coded**: PLM/ERP connection, document templates, workflows, evaluation rules, security parameters, hosting and retention are all settings Harmatton's administrators choose (§17). The values written elsewhere in this document are **defaults**, not fixed decisions.
 
 ### 1.2 Out of scope (v1)
 
@@ -39,6 +43,7 @@ The Supplier Collaboration Portal gives every **PLM part number** a single, cont
 
 | Term | Meaning |
 |---|---|
+| **We / our / internal** | **Harmatton** and its staff. |
 | **Part** | An item identified by a PLM part number (+ revision). The central object of the portal. |
 | **Part workspace** | The space dedicated to one *part × supplier* pair. Contains the three areas below. |
 | **Technical area** | Documents **we** provide to the supplier (drawings, 2D/3D, specifications, requirements). |
@@ -60,7 +65,7 @@ Access is **deny‑by‑default**: a user only sees what a role *and* an explici
 
 | Role | Typical person | Main rights |
 |---|---|---|
-| **Portal Administrator** | IT / Quality system owner | Manage users, roles, suppliers, part assignments, templates. **Cannot** evaluate documents (segregation of duties). |
+| **Portal Administrator** | IT / Quality system owner | Manage users, roles, suppliers, part assignments, templates and all configuration settings (§17; security settings need a second approver). **Cannot** evaluate documents (segregation of duties). |
 | **Supplier Quality Engineer (SQE)** | Supplier quality | Evaluate project & delivery documents, approve/reject deletion and modification requests, unlock documents, request new documents. |
 | **Engineering / Design** | Product engineers | Publish/supersede technical documents (drawings, specs) — normally synchronised from PLM. Read project area. |
 | **Purchasing / Buyer** | Buyers | Assign suppliers to parts (with SQE validation), read all areas, follow deliveries. |
@@ -260,9 +265,9 @@ When a document is submitted, the system runs **automatic checks** and proposes 
 | Revision consistency | Document refers to part rev **C**, PLM current rev is **C** | Suggested **Reject** if mismatch |
 | Validity dates | Certificate not expired, audit < 12 months old | Suggested **Reject** |
 | Delivery cross‑checks | PO exists in ERP, belongs to this supplier and part; quantity ≤ open PO quantity; CoC lot number = delivery lot number | Flag mismatch |
-| Template compliance (optional, phase 3) | Text extraction / AI check that the self‑assessment score ≥ threshold, all sections of the control plan template present | Suggested verdict + highlighted findings |
+| Content review by Claude (§6.4) | Self‑assessment score ≥ threshold, all sections of the control plan template present, special characteristics of the drawing covered, CoC signed and referencing the right PN/lot | Suggested verdict + findings with page references |
 
-The final decision is **always human** and **always logged**; the proposal is shown as "Suggested: Approve — 6/6 checks passed". Optionally, for low‑risk delivery documents (e.g., CoC on a non‑critical part where all checks pass), a rule can **auto‑approve**, configurable by the Quality Manager and fully logged as "auto‑approved by rule R‑12".
+The final decision is **human by default** and **always logged**; the proposal is shown as "Suggested: Approve — 6/6 checks passed". Optionally, for low‑risk delivery documents (e.g., CoC on a non‑critical part where all checks pass), a rule can **auto‑approve**, configurable by the Quality Manager and fully logged as "auto‑approved by rule R‑12". Which checks run, their thresholds, and whether a failed check *suggests* or *blocks* are all configurable per document type (§17.4).
 
 ### 6.3 Status roll‑up
 
@@ -270,6 +275,62 @@ The final decision is **always human** and **always logged**; the proposal is sh
 - **Part approval status** drives a visible badge: "Supplier X approved for serial production of PN 123‑456 rev C".
 - **Delivery status**: *Incomplete* → *Complete* → *Received & checked* / *Blocked* (a document rejected).
 - Dashboards: open evaluations per SQE, overdue documents, expiring certificates (30/15/7 days), deliveries without CoC.
+
+### 6.4 AI‑assisted review with Claude
+
+Harmatton is already a Claude partner, so the AI assistant uses **Claude through the Anthropic API**. It reads a submitted document the way an SQE would and prepares the evaluation; the SQE confirms or overrides with one click.
+
+**What Claude receives (one request = one document, never more):**
+
+- The submitted file — PDF sent natively as a document block; XLSX/DOCX converted server‑side to text/CSV before sending (scanned images are sent as images).
+- The context of *that* slot only: document type, evaluation checklist, configured acceptance criteria, part number and current PLM revision, the delivery record (PO, lot, quantity) for delivery documents, and — for checks against the drawing — the relevant extract of Harmatton's drawing (e.g., list of special characteristics), if the setting allows it.
+- The instructions (system prompt) maintained by Harmatton's quality team per document type, versioned like any other configuration.
+
+**What Claude returns** — a schema‑validated JSON object (Structured Outputs, `output_config.format`), stored with the document version:
+
+```jsonc
+{
+  "suggested_verdict": "REJECT",            // APPROVE | REJECT | NOT_APPLICABLE | NEEDS_HUMAN
+  "confidence": "high",                      // high | medium | low
+  "extracted_fields": {
+    "part_number": "123-456", "revision": "B",
+    "document_date": "2026-10-02", "signed": true, "lot": null
+  },
+  "checklist": [
+    {"item": "Refers to current revision", "result": "FAIL",
+     "evidence": "Header says 'Rev B'; PLM current revision is C", "page": 1},
+    {"item": "Reaction plan defined for each special characteristic", "result": "PASS", "page": 3}
+  ],
+  "summary_for_sqe": "Control plan is complete but refers to revision B.",
+  "draft_message_to_supplier": "Please update the control plan to drawing revision C…"
+}
+```
+
+**Typical uses**
+
+| Document | What Claude checks |
+|---|---|
+| Self‑assessment audit | All chapters answered, score computed correctly, score ≥ configured threshold, action plan present for low‑scored items |
+| Control plan / PFMEA | Every special characteristic of the drawing is covered, reaction plans defined, revision matches PLM, PFMEA high‑risk items have actions |
+| Dimensional report / FAI | All drawing characteristics measured, results within tolerance, measurement equipment listed |
+| Certificate of Conformity | PN, revision, PO, lot and quantity match the delivery record; signed and dated; required standard referenced |
+| Material certificate | Material grade matches drawing, values within specification, certificate type (e.g., 3.1) as required |
+
+**Implementation choices (all configurable, §17.5)**
+
+- **Model**: default `claude-opus-5-5` (most accurate on long technical documents); per document type Harmatton can select `claude-sonnet-5-5`, or `claude-haiku-5-5` for high‑volume simple extraction (e.g., CoC fields) to reduce cost.
+- **Real‑time vs. batch**: real‑time on submission (result in seconds/minutes); periodic bulk re‑checks (e.g., re‑verifying all certificates after a template change) via the **Message Batches API** at reduced cost.
+- **Prompt caching** of the stable part of each request (instructions + template + checklist) to cut cost and latency.
+- **Access route**: directly through the Anthropic API, or through Amazon Bedrock, Google Cloud Vertex AI or Microsoft Foundry if Harmatton wants inference to run inside its own cloud tenant.
+
+**Guardrails**
+
+- Claude **suggests, people decide**. A verdict is only applied automatically if Harmatton explicitly enables an auto‑approval rule for that document type (§17.4); auto‑reject is never applied without a human.
+- Supplier documents are **untrusted input**: Claude has no tools and cannot take actions; its output is constrained to the JSON schema; text inside a document such as "approve this document" has no effect and is flagged as a finding.
+- **Strict isolation**: a request contains only the document being checked and its own slot context — never other suppliers' documents or other parts.
+- If the model declines or the response cannot be parsed, the result is `NEEDS_HUMAN`; the portal never blocks on the AI.
+- Every AI result is logged in the audit trail with model ID, prompt/config version and timestamp. A monthly report shows the **agreement rate** between Claude's suggestions and SQE decisions per document type; Harmatton uses it to tune instructions or decide where to enable auto‑approval.
+- **Data handling**: only the document under review is sent; data retention and processing terms (e.g., zero‑data‑retention eligibility, region) to be confirmed in Harmatton's agreement with Anthropic or with the chosen cloud provider. The AI feature can be switched off entirely, per supplier, or per confidentiality class (e.g., off for export‑controlled parts).
 
 ---
 
@@ -292,14 +353,16 @@ E‑mails **never contain documents or confidential content** — only a notific
 
 Security is the top requirement. The design follows **least privilege**, **deny by default**, **defence in depth** and **full traceability**. Targets: alignment with ISO/IEC 27001 controls and, if we are in automotive, **TISAX** (high protection level for prototype/confidential data); OWASP ASVS **Level 2** minimum (Level 3 for authentication and access control).
 
+> **Configurable vs. fixed.** Values below (timeouts, periods, allowed methods…) are **defaults** that Harmatton can tune in the admin console (§17.6). Harmatton can always make them *stricter*; a small set of **security floors** (§17.1) cannot be weakened by any setting.
+
 ### 8.1 Identity & authentication
 
-- **Internal users**: Single Sign‑On through the corporate identity provider (e.g., Microsoft Entra ID via OIDC/SAML). Joiners/leavers handled automatically from the directory.
-- **Supplier users**: individual, named accounts only — **no shared accounts**. Invited by e‑mail by a Portal Administrator or the Supplier Administrator; invitation links are single‑use and expire after 72 h.
+- **Internal users**: Single Sign‑On through Harmatton's identity provider — configurable: Microsoft Entra ID, Google Workspace, Okta, Keycloak or any OIDC/SAML IdP. Joiners/leavers handled automatically from the directory.
+- **Supplier users**: individual, named accounts only — **no shared accounts**. Invited by e‑mail by a Portal Administrator or the Supplier Administrator; invitation links are single‑use and expire after 72 h (configurable). Optionally, a large supplier can log in through **its own IdP** (SAML/OIDC federation), still with MFA.
 - **Mandatory MFA** for everyone (TOTP app or FIDO2/WebAuthn security key / passkey; SMS not allowed).
 - Password policy per NIST SP 800‑63B (length ≥ 12, breached‑password check, no forced periodic rotation), lockout/back‑off after failed attempts.
 - **Step‑up re‑authentication** for sensitive actions: approving, approving a deletion, changing access rights, downloading export‑controlled files.
-- Session: short idle timeout (e.g., 30 min), absolute timeout (e.g., 10 h), secure/HttpOnly/SameSite cookies, logout everywhere on password/MFA change.
+- Session: idle timeout (default 30 min, configurable 15–60), absolute timeout (default 10 h, configurable 8–12), secure/HttpOnly/SameSite cookies, logout everywhere on password/MFA change.
 - Optional: IP allow‑listing per supplier company, geo‑blocking for countries we do not work with.
 
 ### 8.2 Authorisation model
@@ -310,8 +373,8 @@ Security is the top requirement. The design follows **least privilege**, **deny 
 - Non‑guessable identifiers (UUIDs) *plus* authorisation checks (protection against IDOR).
 - Unauthorised objects return **404**, so suppliers cannot discover which part numbers exist.
 - **Segregation of duties** enforced by the system (see §6.1); granting a supplier access to a part requires two people (Buyer proposes, SQE or Admin confirms — "four‑eyes").
-- **Access recertification**: every quarter, each SQE/Buyer confirms the list of supplier users and part assignments they own; unconfirmed accesses are suspended automatically.
-- Automatic expiry: supplier accounts inactive for 90 days are disabled; access of internal auditors is time‑bound.
+- **Access recertification**: every quarter by default (configurable: monthly / quarterly / semi‑annual), each SQE/Buyer confirms the list of supplier users and part assignments they own; unconfirmed accesses are suspended automatically.
+- Automatic expiry: supplier accounts inactive for 90 days (configurable 30–180) are disabled; access of internal auditors is time‑bound.
 
 ### 8.3 Data protection
 
@@ -334,13 +397,13 @@ Security is the top requirement. The design follows **least privilege**, **deny 
 
 - Every action is logged: login/logout/failed login, view, download, upload, new version, submit, evaluation, comment, deletion request & decision, access change, NDA acceptance, PLM revision acknowledgement.
 - Log entry: who, when (UTC), from where (IP, user agent), what object, before/after state.
-- Logs are **append‑only and tamper‑evident** (hash chaining or WORM storage), retained per policy (e.g., 10 years for product traceability, to be confirmed).
+- Logs are **append‑only and tamper‑evident** (hash chaining or WORM storage), retained per the configured retention policy (§17.7).
 - Audit trail viewable per document, per part, per supplier; exportable for audits.
 - Security events forwarded to the SIEM; alerts on anomalies (mass downloads, logins from new countries, repeated 404 probing).
 
 ### 8.6 Confidentiality classes & export control
 
-- Each part/document carries a classification (e.g., *Internal*, *Confidential*, *Strictly confidential*, *Export‑controlled*).
+- Each part/document carries a classification. Default classes: *Internal*, *Confidential*, *Strictly confidential*, *Export‑controlled* — Harmatton can rename, add or remove classes and choose the controls attached to each (§17.6).
 - Higher classes can enforce: view‑only, watermarking, IP restriction, step‑up MFA on download, additional NDA, named‑user approval.
 - Export‑controlled items can only be shared with suppliers/users whose country and screening status allow it.
 
@@ -356,12 +419,12 @@ Security is the top requirement. The design follows **least privilege**, **deny 
 - WAF in front of the application; DDoS protection.
 - Separate environments (dev/test/prod); **no production supplier data in test**.
 - **Independent penetration test** before go‑live and yearly, plus after major changes.
-- Backups encrypted, tested restore, defined RPO/RTO (e.g., RPO 1 h / RTO 8 h).
+- Backups encrypted, tested restore, RPO/RTO per configured service level (default RPO 1 h / RTO 8 h).
 
 ### 8.9 Retention & privacy
 
-- Retention per document type (e.g., product traceability documents ≥ 10–15 years — to be aligned with our quality system and customer requirements).
-- Personal data of supplier users minimised (name, e‑mail, company, phone optional); GDPR‑compliant (purpose, retention, right of access); data hosted in the EU (to be confirmed).
+- Retention period configured per document type (default 10 years after the part's end of life for product‑traceability documents), with legal hold (§17.7).
+- Personal data of supplier users minimised (name, e‑mail, company, phone optional); GDPR‑compliant (purpose, retention, right of access); hosting region chosen by Harmatton (§17.7).
 
 ---
 
@@ -503,7 +566,7 @@ flowchart LR
     ERP[(ERP)] --> CON
 ```
 
-Indicative technology choices (to be aligned with our IT standards):
+Indicative technology choices (adjustable to Harmatton's IT standards; integrations and identity providers are pluggable adapters selected by configuration):
 
 | Layer | Option |
 |---|---|
@@ -514,7 +577,9 @@ Indicative technology choices (to be aligned with our IT standards):
 | Identity | Microsoft Entra ID (staff) + Entra External ID / Keycloak (suppliers), OIDC, MFA |
 | Async jobs | Message queue (e.g., RabbitMQ, Azure Service Bus) |
 | Antivirus | ClamAV or cloud malware scanning |
-| Hosting | EU cloud region or on‑premise DMZ, depending on IT policy |
+| AI | Claude via the Anthropic API (or via Amazon Bedrock / Google Cloud Vertex AI / Microsoft Foundry) — §6.4 |
+| Configuration | Versioned settings store + admin console; export/import as YAML for test → production |
+| Hosting | Configurable: Harmatton's cloud tenant (Azure / AWS / GCP), managed SaaS region, or on‑premise DMZ |
 
 ---
 
@@ -535,6 +600,8 @@ erDiagram
     DOCUMENT_VERSION ||--o{ EVALUATION : "evaluated by"
     DOC_SLOT ||--o{ CHANGE_REQUEST : "deletion / modification"
     SUPPLIER_USER ||--o{ USER_PART_RESTRICTION : "optional"
+    DOCUMENT_VERSION ||--o{ AI_REVIEW : "pre-checked by"
+    DOC_TEMPLATE ||--o{ WORKSPACE : "generates checklist"
 ```
 
 | Entity | Key fields |
@@ -552,6 +619,9 @@ erDiagram
 | `change_request` | id, slot_id, type (DELETE/MODIFY), reason, requested_by, decision, decided_by, decided_at |
 | `delivery` | id, workspace_id, po_number, po_line, quantity, lot, ship_date, status, received_by |
 | `revision_ack` | id, workspace_id, part_revision_id, user_id, acknowledged_at |
+| `ai_review` | id, version_id, model_id, prompt_version, suggested_verdict, confidence, result_json, created_at, agreed_with_sqe |
+| `doc_template` | id, name, scope (commodity / criticality / supplier / part), slots_json, version, status |
+| `config_setting` | id, key, value_json, scope_level (platform / tenant / site / commodity / supplier / part), scope_id, version, changed_by, approved_by, effective_from |
 | `audit_event` | id, ts, actor_id, actor_type, ip, action, object_type, object_id, before, after, prev_hash, hash |
 
 ---
@@ -574,6 +644,8 @@ All endpoints require an authenticated session; every one performs an authorisat
 | POST | `/api/workspaces/{id}/deliveries` | Supplier contributor |
 | POST | `/api/deliveries/{id}/receive` | Logistics |
 | GET | `/api/audit?object=...` | Admin / QM / Auditor |
+| GET/PUT | `/api/admin/config/{key}?scope=...` | Admin (security keys need a second approver) |
+| POST | `/api/admin/config/export` · `/import` | Admin |
 
 There is **no DELETE endpoint** for documents available to suppliers.
 
@@ -583,10 +655,10 @@ There is **no DELETE endpoint** for documents available to suppliers.
 
 | Phase | Content | Indicative duration |
 |---|---|---|
-| **0 — Decisions** | Build vs. buy, PLM/ERP API availability, hosting, document templates, retention periods, security classification | 3–4 weeks |
+| **0 — Configuration workshop** | With Harmatton: fill the configuration sheet (§17) — PLM/ERP mode, templates, workflows, security settings, hosting, retention, AI options. Nothing blocks development: defaults are used until a choice is made | 2–3 weeks |
 | **1 — MVP (pilot)** | Manual part import (PLM part numbers), supplier/user management with MFA, assignments, technical area, project area with checklist, one‑click evaluation, versioning, lock after approval, deletion requests, audit log, e‑mail notifications | 3–4 months |
 | **2 — Deliveries & PLM** | Delivery area, ERP PO validation, PLM connector (parts, revisions, drawings, supersede + acknowledgement), watermarking, dashboards | 2–3 months |
-| **3 — Automation & scale** | Automatic pre‑evaluation rules, expiry management, auto‑approval rules for low‑risk docs, access recertification campaigns, SIEM integration, PLM approval feedback, optional AI document checks | 2–3 months |
+| **3 — Automation & scale** | Automatic pre‑evaluation rules, expiry management, auto‑approval rules for low‑risk docs, access recertification campaigns, SIEM integration, PLM approval feedback, Claude AI pre‑review (suggest mode first, auto‑approval only where the agreement rate justifies it) | 2–3 months |
 
 Pilot with **2–3 suppliers and 10–20 part numbers**, then roll out by commodity. Penetration test before the pilot opens to external suppliers.
 
@@ -603,18 +675,157 @@ Pilot with **2–3 suppliers and 10–20 part numbers**, then roll out by commod
 7. **Delivery completeness** — A delivery without CoC is shown as *Incomplete* to the supplier and logistics; a PO that does not belong to the supplier/part is flagged.
 8. **Security** — MFA enforced for all accounts; downloads use signed URLs that expire; uploads are virus‑scanned; penetration test shows no high/critical findings.
 9. **Revocation** — Ending an assignment removes the supplier's access within one minute; disabled users cannot use existing sessions.
+10. **Configuration** — An administrator changes a setting (e.g., adds a document to a template, switches PLM mode from file import to API) without a code change or redeployment; the change is versioned, audited, and security settings require a second approver. A setting cannot weaken a security floor (§17.1).
+11. **AI pre‑review** — A submitted control plan that refers to an outdated revision receives a Claude suggestion "REJECT" with the finding and page reference; the SQE can accept or override it in one click; the suggestion, model ID and config version are in the audit trail. With the AI switched off, the workflow is unchanged apart from the missing suggestion.
 
 ---
 
-## 17. Open questions
+## 17. Configuration options
 
-1. Which PLM (and version) do we use, and does it expose a REST API or offer a supplier collaboration module already licensed?
-2. Which ERP holds the POs, and can we query PO lines per supplier?
-3. Which project document list do we need per commodity / criticality (PPAP level, FAI, internal standard)?
-4. Do we share **3D models** with suppliers, or only 2D PDFs? Native CAD or STEP only?
-5. Must the supplier upload *its* PO acknowledgement, or do we publish the PO to the supplier from ERP?
-6. Who evaluates delivery documents — SQE, incoming inspection, or both?
-7. Retention periods per document type and customer requirements?
-8. Hosting constraints (cloud vs on‑premise, EU data residency)?
-9. Are any parts subject to export control or customer‑imposed confidentiality (e.g., TISAX prototype protection)?
-10. Expected volumes: number of suppliers, supplier users, parts, deliveries per month (sizing and licence costs).
+Instead of being decided once in the specification, every business choice is a **setting** that Harmatton's administrators can change at any time from the admin console — no code change, no redeployment. The portal ships with sensible **defaults** so it works out of the box; Harmatton adapts it to its process, and can adapt it again as the process evolves.
+
+### 17.1 How configuration works
+
+**Scope levels — the most specific level wins:**
+
+```
+Platform default  →  Harmatton (tenant)  →  Site / plant  →  Commodity / criticality  →  Supplier  →  Part number
+```
+
+Example: the default project template is "Standard"; the *Castings* commodity uses "PPAP level 3"; one specific part number additionally requires a capability study.
+
+**Governance of settings**
+
+- Every change is **versioned** (who, when, old value → new value, reason) and visible in the audit trail; any previous version can be restored.
+- **Security‑relevant settings** (§17.6) require a **second approver** (four‑eyes) before taking effect.
+- **Preview / impact check** before saving: "this template change affects 42 open workspaces — apply to new workspaces only, or to all?"
+- **Effective date**: a change can be scheduled (e.g., new retention policy from 1 January).
+- **Export / import** of the whole configuration as a YAML file, to move settings from test to production and keep them under version control.
+- Settings are validated (types, ranges, dependencies) — e.g., auto‑approval cannot be enabled for a document type unless automatic checks are defined for it.
+
+**Security floors — fixed, never configurable**
+
+These protect Harmatton and its suppliers' data and cannot be switched off by any setting:
+
+| Floor | Why |
+|---|---|
+| Supplier isolation: a supplier only sees parts it is assigned to; anything else returns 404 | Core confidentiality requirement |
+| Server‑side authorisation on every request + database row‑level security | Defence in depth |
+| Suppliers can never hard‑delete; deletions are soft and require internal approval | Traceability |
+| Every modification creates a new version; approved documents are locked | Integrity |
+| MFA for every account; no shared accounts; no SMS one‑time codes | Account takeover is the #1 risk |
+| Encryption in transit and at rest; private storage with short‑lived signed URLs | Data protection |
+| Antivirus scan before any uploaded file becomes available | Malware |
+| Append‑only, tamper‑evident audit trail | Audits, disputes |
+| AI never makes a *reject* decision on its own; AI requests contain one document only | Fairness to suppliers, isolation |
+
+Harmatton can always make security **stricter** than the defaults; it can never go below these floors.
+
+### 17.2 Integrations (PLM & ERP)
+
+| Setting | Options | Default | Scope |
+|---|---|---|---|
+| PLM connection mode | **Direct API connector** · **Scheduled file import** (CSV/XML + PDFs via SFTP) · **Manual entry** of PLM part numbers | Manual entry (switch at any time; the data model is identical) | Tenant |
+| PLM system adapter | Windchill · Teamcenter · 3DEXPERIENCE · Aras · SAP PLM · Generic REST · None | None | Tenant |
+| PLM sync frequency | On release event · Hourly · Nightly · On demand | Nightly | Tenant |
+| Shareable PLM lifecycle states | Any list (e.g., *Released*, *Prototype released*) | Released | Tenant / commodity |
+| Part‑number format validation | Regular expression | Accept any | Tenant |
+| Write approval status back to PLM | Off · Attribute only · Attribute + PSW/approval PDF | Off | Tenant |
+| ERP connection | SAP S/4HANA · Microsoft Dynamics · Odoo · Generic REST · CSV import · None | None | Tenant |
+| PO validation on deliveries | Off · Warn · Block | Warn (if ERP connected) | Tenant / supplier |
+| Supplier ↔ part assignment source | Manual · Proposed from ERP/PLM sourcing data, confirmed by a person · Automatic from ERP | Manual | Tenant |
+| Use the PLM's own supplier collaboration module instead of the portal's technical area | Yes · No | No | Tenant |
+
+### 17.3 Documents & templates
+
+| Setting | Options | Default | Scope |
+|---|---|---|---|
+| Project document template | Template library: **Standard** (§4.3 list) · **PPAP levels 1–5** · **First Article Inspection** · **Light** (low‑risk parts) · any **custom** template | Standard | Commodity / criticality / supplier / part |
+| Per‑slot settings | Required / optional · allowed file formats · validity period / expiry · evaluator role · evaluation checklist items · automatic checks · AI review on/off | As in template | Template |
+| "Not applicable" allowed | Per slot: yes / no; justification required yes / no | Yes, justification required | Template |
+| Delivery document set | Any combination: CoC · PO / PO acknowledgement · delivery note / packing list · material certificate (type, e.g., 3.1) · inspection report · concession reference · custom | CoC + delivery note | Part / commodity / supplier |
+| Technical files shared | 2D PDF only · 2D + STEP · 2D + STEP + native CAD | 2D PDF only | Classification / part |
+| Download policy for technical files | Download allowed · Download with watermark · View‑only in browser | Download with watermark | Classification |
+| Watermark content | Any of: supplier name, user name, date/time, "CONFIDENTIAL", custom text | Supplier + user + date/time | Tenant |
+| New‑revision acknowledgement | Off · Required · Required within *N* days (then escalate) | Required within 10 days | Tenant / commodity |
+| Allowed upload formats & max size | List + MB | PDF, XLSX, DOCX, STEP, PNG/JPG · 200 MB | Tenant |
+
+### 17.4 Workflow & evaluation
+
+| Setting | Options | Default | Scope |
+|---|---|---|---|
+| PO handling | Supplier uploads its PO acknowledgement · Harmatton publishes the PO from ERP · Both | Supplier uploads | Tenant / supplier |
+| Who evaluates delivery documents | SQE · Incoming inspection · Either · Both (two steps) | Incoming inspection, SQE for rejections | Tenant / commodity |
+| Approval levels | Single approval · Two‑step (e.g., SQE then Quality Manager) | Single; two‑step for *critical* parts | Document type / criticality |
+| Rejection reasons | Free text · Reason codes · Both | Both | Tenant |
+| Signature of verdict | None · Step‑up MFA · Qualified electronic signature | Step‑up MFA | Document type / criticality |
+| Automatic checks | Enable / disable each check (§6.2) · thresholds · failed check = *suggest* or *block submission* | All on, suggest | Document type |
+| Auto‑approval rules | Off · On for selected document types when all checks pass (and, optionally, AI agrees with high confidence) | Off | Document type / criticality / supplier |
+| Deletion request approver | SQE · SQE + Quality Manager | SQE | Tenant / criticality |
+| Who may unlock an approved document | SQE · Quality Manager only | SQE | Tenant |
+| Delivery lock trigger | When marked received & checked · When complete · Manually | Received & checked | Tenant |
+| Reminders & escalation | Reminder after *N* days, escalation to manager after *M* days, expiry warnings at *X/Y/Z* days | 5 / 10 days; 30 / 15 / 7 days | Tenant / document type |
+| Notification channels | E‑mail · In‑app · Microsoft Teams / Slack webhook (internal only) | E‑mail + in‑app | User preference within tenant limits |
+| Internal roles | Rename roles, add custom roles from permission building blocks, restrict scope by site / commodity / supplier | Roles of §3.1 | Tenant |
+
+### 17.5 AI assistant (Claude)
+
+| Setting | Options | Default | Scope |
+|---|---|---|---|
+| AI review | Off · **Suggest only** · Suggest + auto‑approve where an auto‑approval rule allows it | Suggest only | Tenant / document type / supplier / classification |
+| Model | `claude-opus-5-5` · `claude-sonnet-5-5` · `claude-haiku-5-5` | `claude-opus-5-5` | Document type |
+| Access route | Anthropic API · Amazon Bedrock · Google Cloud Vertex AI · Microsoft Foundry | Anthropic API | Tenant |
+| Processing | Real‑time on submission · Batch (cheaper, results within hours) | Real‑time | Document type |
+| Instructions & checklist | Editable per document type, versioned | Provided templates (§6.4) | Document type |
+| Send drawing extract for cross‑checks | Yes · No | Yes, except *Export‑controlled* | Classification |
+| Language of findings & draft messages | French · English · Arabic · other | Same as the user's interface | Tenant / supplier |
+| Show AI findings to the supplier | Never · Only after SQE validation · Immediately (self‑check before submission) | Only after SQE validation | Tenant / supplier |
+
+### 17.6 Security & access (stricter only)
+
+| Setting | Options | Default | Scope |
+|---|---|---|---|
+| Internal identity provider | Entra ID · Google Workspace · Okta · Keycloak · any OIDC/SAML | Entra ID | Tenant |
+| Supplier identity | Built‑in accounts · Entra External ID / Keycloak · Federation with the supplier's own IdP | Built‑in accounts | Tenant / supplier |
+| MFA methods | Authenticator app (TOTP) · Passkey / FIDO2 key · Passkey only | TOTP + passkey | Tenant / classification |
+| Step‑up re‑authentication | Which actions require it | Approve, approve deletion, access changes, download of export‑controlled files | Tenant |
+| Session idle / absolute timeout | 15–60 min / 8–12 h | 30 min / 10 h | Tenant |
+| Disable inactive supplier accounts after | 30–180 days | 90 days | Tenant |
+| Access recertification | Monthly · Quarterly · Semi‑annual | Quarterly | Tenant |
+| Four‑eyes on supplier ↔ part assignment | On · Off for low classification | On | Classification |
+| IP allow‑list | Off · Per supplier company | Off | Supplier |
+| Geo‑blocking | List of blocked / allowed countries | Off | Tenant |
+| Confidentiality classes | Rename / add / remove classes; for each: download policy, watermark, MFA method, IP restriction, extra NDA, AI allowed | 4 classes (§8.6) | Tenant |
+| Export‑control screening | Off · On (country + screening status required before sharing) | Off | Tenant / classification |
+| Terms of use & NDA | Text, version, re‑acceptance on change | Standard template | Tenant / supplier |
+| Signed URL lifetime | 1–5 min | 5 min | Tenant |
+
+### 17.7 Data, hosting & presentation
+
+| Setting | Options | Default | Scope |
+|---|---|---|---|
+| Hosting | Harmatton's cloud tenant (Azure / AWS / GCP) · Managed SaaS · On‑premise DMZ | Harmatton's cloud tenant | Deployment |
+| Data residency region | Any region offered by the chosen host | Closest region to Harmatton that meets customer requirements | Deployment |
+| Retention per document type | Years after creation / after part end of life · legal hold | 10 years after part end of life for traceability documents; 3 years for others | Document type |
+| Purge after retention | Automatic · After manual confirmation | After manual confirmation | Tenant |
+| Backup service level | RPO / RTO | 1 h / 8 h | Deployment |
+| Interface languages | French · English · Arabic · others | French + English | Tenant; user picks |
+| Branding | Logo, colours, portal domain, e‑mail sender | Harmatton branding | Tenant |
+| Quotas | Storage per supplier, max file size, API rate limits | Unlimited storage · 200 MB · standard limits | Tenant / supplier |
+
+### 17.8 From open questions to settings
+
+The questions of the previous draft no longer block the project — each one is now a setting with a default, to be filled in during the configuration workshop (§15, phase 0):
+
+| Former open question | Setting(s) |
+|---|---|
+| Which PLM, and does it have an API or a supplier module? | PLM connection mode, PLM system adapter, use PLM supplier module (§17.2) |
+| Which ERP holds the POs? | ERP connection, PO validation (§17.2) |
+| Which project documents per commodity / criticality? | Project document template & per‑slot settings (§17.3) |
+| Do we share 3D models / native CAD? | Technical files shared, download policy (§17.3) |
+| PO acknowledgement from supplier, or PO published by us? | PO handling (§17.4) |
+| Who evaluates delivery documents? | Who evaluates delivery documents (§17.4) |
+| Retention periods? | Retention per document type, purge (§17.7) |
+| Hosting and data residency? | Hosting, data residency region (§17.7) |
+| Export control / customer confidentiality? | Confidentiality classes, export‑control screening (§17.6) |
+| Expected volumes? | Quotas (§17.7); sizing is an operations input, not a functional decision |
